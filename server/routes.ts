@@ -1,9 +1,10 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
-import { createReadStream, existsSync } from "node:fs";
+import { createReadStream, existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import QRCode from "qrcode";
 import { detectCadKind, uploadRejectionMessage } from "../shared/format";
+import { parseSolidEdgeManifest } from "../shared/manifest";
 import { formatRevision, jobToSlug, paperRevisionWarning, parseRevisionLabel } from "../shared/slug";
 import type { CreateProjectInput, ProjectDetail, ViewerPayload } from "../shared/types";
 import { PUBLIC_URL, STORAGE_DIR } from "./config";
@@ -189,6 +190,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
         name: "Assieme completo",
         kind: "generale",
         isolatePartIds: [],
+        visibleNames: [],
         explode: 0,
         createdAt: new Date().toISOString(),
       });
@@ -199,10 +201,119 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
         name: "Montaggio esploso",
         kind: "esploso",
         isolatePartIds: [],
+        visibleNames: [],
         explode: 0.65,
         createdAt: new Date().toISOString(),
       });
     }
     return { revision: getRevision(revision.id), current: getPublishedRevision(project.id) };
+  });
+
+  app.post("/api/publish", async (request, reply) => {
+    let stepBytes: Uint8Array | null = null;
+    let stepName = "solidedge.stp";
+    let manifestRaw: unknown = null;
+
+    for await (const part of request.parts()) {
+      if (part.type === "file" && (part.fieldname === "step" || part.fieldname === "file")) {
+        stepName = part.filename || stepName;
+        stepBytes = await part.toBuffer();
+      } else if (part.type === "field" && part.fieldname === "manifest") {
+        manifestRaw = JSON.parse(String(part.value));
+      }
+    }
+
+    if (!stepBytes) {
+      return reply.code(400).send({ error: "Il pubblicatore deve inviare lo STEP esportato da Solid Edge." });
+    }
+    let manifest;
+    try {
+      manifest = parseSolidEdgeManifest(manifestRaw);
+    } catch (error) {
+      return reply.code(400).send({ error: error instanceof Error ? error.message : "Manifest non valido." });
+    }
+
+    const kind = detectCadKind(stepName, stepBytes);
+    if (kind !== "step" && kind !== "iges" && kind !== "brep") {
+      return reply.code(415).send({
+        error: "Solid Edge deve esportare la geometria in STEP (SaveAs), non inviare l'ASM nativo.",
+      });
+    }
+
+    const slug = jobToSlug(manifest.jobCode);
+    let project = getProjectBySlug(slug);
+    if (!project) {
+      project = {
+        id: randomUUID(),
+        slug,
+        jobCode: manifest.jobCode,
+        clientName: manifest.clientName,
+        title: manifest.title,
+        createdAt: new Date().toISOString(),
+      };
+      insertProject(project);
+    }
+
+    const revisionNumber = nextRevisionNumber(project.id);
+    const destDir = join(STORAGE_DIR, project.slug, `rev${revisionNumber}`);
+    const processed = await processCadFile({
+      kind,
+      bytes: stepBytes,
+      originalName: stepName,
+      destDir,
+    });
+    if (manifest.assembly) {
+      writeFileSync(processed.assemblyPath, JSON.stringify(manifest.assembly, null, 2));
+    }
+
+    const revision = {
+      id: randomUUID(),
+      projectId: project.id,
+      revision: revisionNumber,
+      originalFilename: manifest.source.document,
+      originalPath: processed.originalPath,
+      viewerPath: processed.viewerPath,
+      assemblyPath: processed.assemblyPath,
+      published: false,
+      superseded: false,
+      createdAt: new Date().toISOString(),
+      notes: manifest.notes ?? `Pubblicato da Solid Edge: ${manifest.source.document}`,
+      partCount: manifest.assembly?.parts.length ?? processed.partCount,
+      triangleCount: processed.triangleCount,
+    };
+    insertRevision(revision);
+    publishRevision(project.id, revision.id);
+
+    insertView({
+      id: randomUUID(),
+      projectId: project.id,
+      revisionId: revision.id,
+      name: "Completo",
+      kind: "generale",
+      isolatePartIds: [],
+      visibleNames: [],
+      explode: 0,
+      createdAt: new Date().toISOString(),
+    });
+    for (const config of manifest.configurations) {
+      insertView({
+        id: randomUUID(),
+        projectId: project.id,
+        revisionId: revision.id,
+        name: config.name,
+        kind: "configurazione",
+        isolatePartIds: [],
+        visibleNames: config.visibleNames,
+        explode: config.explode ?? 0,
+        createdAt: new Date().toISOString(),
+      });
+    }
+
+    return {
+      ok: true,
+      project,
+      revision: getRevision(revision.id),
+      viewerUrl: viewerUrl(request, project.slug),
+    };
   });
 }

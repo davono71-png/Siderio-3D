@@ -30,6 +30,7 @@ export class SiderioEngine {
   private selectedId: string | null = null;
   private hidden = new Set<string>();
   private isolated: string | null = null;
+  private visibleNames: string[] | null = null;
   private explode = 0;
   private modelCenter = new THREE.Vector3();
   private modelSize = 1;
@@ -137,6 +138,7 @@ export class SiderioEngine {
   showAll(): void {
     this.hidden.clear();
     this.isolated = null;
+    this.visibleNames = null;
     this.setExplode(0);
     this.applyVisibility();
     this.fit();
@@ -202,9 +204,10 @@ export class SiderioEngine {
     return this.explode;
   }
 
-  applyViewPreset(isolatePartIds: string[], explode: number): void {
+  applyViewPreset(isolatePartIds: string[], explode: number, visibleNames: string[] = []): void {
     this.hidden.clear();
-    this.isolated = isolatePartIds[0] ?? null;
+    this.visibleNames = visibleNames.length ? visibleNames.map((name) => name.toLowerCase()) : null;
+    this.isolated = !this.visibleNames && isolatePartIds[0] ? isolatePartIds[0] : null;
     if (this.isolated) this.select(this.isolated);
     this.setExplode(explode);
     this.applyVisibility();
@@ -227,6 +230,7 @@ export class SiderioEngine {
     this.partByMesh.clear();
     this.hidden.clear();
     this.isolated = null;
+    this.visibleNames = null;
     this.selectedId = null;
     this.explode = 0;
   }
@@ -283,7 +287,8 @@ export class SiderioEngine {
 
   private applyVisibility(): void {
     for (const [id, entry] of this.parts) {
-      const visible = this.isolated ? id === this.isolated : !this.hidden.has(id);
+      const inConfig = !this.visibleNames || nameMatches(entry.name, this.visibleNames);
+      const visible = this.isolated ? id === this.isolated : inConfig && !this.hidden.has(id);
       entry.meshes.forEach((mesh) => {
         mesh.visible = visible;
       });
@@ -345,6 +350,11 @@ export class SiderioEngine {
     this.renderer.render(this.scene, this.camera);
     this.clock.getDelta();
   };
+}
+
+function nameMatches(partName: string, visibleNames: string[]): boolean {
+  const name = partName.toLowerCase();
+  return visibleNames.some((item) => name === item || name.includes(item) || item.includes(name));
 }
 
 function findPartId(object: THREE.Object3D): string | null {

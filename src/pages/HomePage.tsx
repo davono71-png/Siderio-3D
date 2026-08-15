@@ -166,7 +166,8 @@ export function HomePage() {
                   Converti e pubblica
                 </button>
                 <p className="hint">
-                  I file .asm di Solid Edge non si aprono qui. Esporta STEP da Solid Edge e carica quello.
+                  Il modo giusto è Solid Edge → <b>Pubblica in officina</b> (cartella publisher). Lo STEP
+                  manuale resta solo come riserva. I file .asm non si caricano qui.
                 </p>
               </form>
             </>

@@ -10,6 +10,12 @@ export const db = new Database(DB_PATH);
 db.pragma("journal_mode = WAL");
 db.pragma("foreign_keys = ON");
 
+try {
+  db.exec("ALTER TABLE saved_views ADD COLUMN visible_names TEXT NOT NULL DEFAULT '[]'");
+} catch {
+  // colonna già presente
+}
+
 db.exec(`
 CREATE TABLE IF NOT EXISTS projects (
   id TEXT PRIMARY KEY,
@@ -45,6 +51,7 @@ CREATE TABLE IF NOT EXISTS saved_views (
   name TEXT NOT NULL,
   kind TEXT NOT NULL,
   isolate_part_ids TEXT NOT NULL DEFAULT '[]',
+  visible_names TEXT NOT NULL DEFAULT '[]',
   explode REAL NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
   FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
@@ -94,6 +101,7 @@ type ViewRow = {
   name: string;
   kind: SavedView["kind"];
   isolate_part_ids: string;
+  visible_names: string;
   explode: number;
   created_at: string;
 };
@@ -135,6 +143,7 @@ export function mapView(row: ViewRow): SavedView {
     name: row.name,
     kind: row.kind,
     isolatePartIds: JSON.parse(row.isolate_part_ids) as string[],
+    visibleNames: JSON.parse(row.visible_names || "[]") as string[],
     explode: row.explode,
     createdAt: row.created_at,
   };
@@ -223,11 +232,12 @@ export function listViews(projectId: string): SavedView[] {
 
 export function insertView(view: SavedView): void {
   db.prepare(
-    `INSERT INTO saved_views (id, project_id, revision_id, name, kind, isolate_part_ids, explode, created_at)
-     VALUES (@id, @projectId, @revisionId, @name, @kind, @isolatePartIds, @explode, @createdAt)`,
+    `INSERT INTO saved_views (id, project_id, revision_id, name, kind, isolate_part_ids, visible_names, explode, created_at)
+     VALUES (@id, @projectId, @revisionId, @name, @kind, @isolatePartIds, @visibleNames, @explode, @createdAt)`,
   ).run({
     ...view,
     isolatePartIds: JSON.stringify(view.isolatePartIds),
+    visibleNames: JSON.stringify(view.visibleNames ?? []),
   });
 }
 

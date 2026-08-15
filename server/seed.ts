@@ -82,6 +82,7 @@ export async function seedDemoIfEmpty(): Promise<void> {
     name: "Assieme completo",
     kind: "generale",
     isolatePartIds: [],
+    visibleNames: [],
     explode: 0,
     createdAt: new Date().toISOString(),
   });
@@ -92,6 +93,7 @@ export async function seedDemoIfEmpty(): Promise<void> {
     name: "Montaggio esploso",
     kind: "esploso",
     isolatePartIds: [],
+    visibleNames: [],
     explode: 0.7,
     createdAt: new Date().toISOString(),
   });

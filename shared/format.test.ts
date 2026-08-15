@@ -12,6 +12,6 @@ describe("detectCadKind", () => {
 
   it("rifiuta i nativi Solid Edge", () => {
     expect(detectCadKind("scala.asm", ole)).toBe("native-cad");
-    expect(uploadRejectionMessage("native-cad", "scala.asm")).toMatch(/Salva con nome/i);
+    expect(uploadRejectionMessage("native-cad", "scala.asm")).toMatch(/Pubblica in officina/i);
   });
 });

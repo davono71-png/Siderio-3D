@@ -18,13 +18,18 @@ npm start  →  porta 3000  →   browser  →  /c/26-0147
 Il browser **non apre lo STEP da 300 MB**. Quando Stefania o Giordano pubblicano una revisione, il server la converte **una volta** in un modello leggero per il viewer (GLB + albero assieme). In officina si apre quello.
 
 ```text
-STEP originale          CAD processor           data/storage
-(resta in archivio)  →  tessellazione      →   model.glb
-                        albero componenti       assembly.json
-                                               siderio.db
+SOLID EDGE (ufficio)                    SIDERIO
+.ASM  →  API Siemens                    POST /api/publish
+      →  Occurrences / Configurations → manifest + STEP
+      →  SaveAs STEP                      ↓
+                                     tessellazione una volta
+                                          ↓
+                                     GLB + QR officina
 ```
 
-I file `.asm` / `.par` nativi di Solid Edge non si importano: da Solid Edge usare **File → Salva con nome → STEP**.
+Lo STEP caricato a mano dalla home resta solo come riserva.
+
+I file `.asm` **non si caricano nel browser né sul server**. Solid Edge li legge lui, con le API Siemens, quando il progettista preme **Pubblica in officina** (`publisher/`). Il server riceve albero, configurazioni e uno STEP esportato da Solid Edge. In officina non serve la licenza CAD.
 
 ## Tre usi, un software
 
@@ -89,7 +94,7 @@ In ufficio il mouse può passare al preset **CAD classico** (tasto centrale ruot
 
 ## Cosa c’è in V1 e cosa no
 
-**V1 (questa)** — pubblicazione, conversione, QR, revisioni, officina, ufficio.
+**V1 (questa)** — pubblicazione, conversione, QR, revisioni, officina, ufficio, pubblicatore Solid Edge.
 
 **V2** — comandi a voce/testo sul viewer (“isolami il telaio”). L’AI non potrà modificare lo STEP.
 

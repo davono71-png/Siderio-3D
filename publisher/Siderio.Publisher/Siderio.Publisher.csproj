@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ApplicationTitle>Siderio — Pubblica in officina</ApplicationTitle>
+    <RootNamespace>Siderio.Publisher</RootNamespace>
+  </PropertyGroup>
+</Project>

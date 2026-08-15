@@ -47,7 +47,7 @@ export function WorkshopPage() {
     next.load(data.glbUrl, data.assembly).then(() => {
       const preset = resolveView(data.views, vista);
       if (preset) {
-        next.applyViewPreset(preset.isolatePartIds, preset.explode);
+        next.applyViewPreset(preset.isolatePartIds, preset.explode, preset.visibleNames);
         setExplode(preset.explode);
       }
     });
@@ -98,6 +98,24 @@ export function WorkshopPage() {
         {busy && <div className="overlay-msg">Apertura modello…</div>}
         {selected && <div className="pick-label">{selected.name}</div>}
       </div>
+
+      {data && data.views.length > 0 && (
+        <div className="workshop-views">
+          {data.views.map((view) => (
+            <button
+              key={view.id}
+              type="button"
+              onClick={() => {
+                engine.current?.applyViewPreset(view.isolatePartIds, view.explode, view.visibleNames);
+                setExplode(view.explode);
+                setSelected(null);
+              }}
+            >
+              {view.name}
+            </button>
+          ))}
+        </div>
+      )}
 
       <footer className="workshop-bar">
         <button type="button" onClick={() => engine.current?.isolate()} disabled={!selected}>

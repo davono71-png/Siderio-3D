@@ -43,15 +43,38 @@ export type AssemblyTree = {
   parts: AssemblyPart[];
 };
 
+export type SavedViewKind = "generale" | "dettaglio" | "esploso" | "montaggio" | "configurazione";
+
 export type SavedView = {
   id: string;
   projectId: string;
   revisionId: string | null;
   name: string;
-  kind: "generale" | "dettaglio" | "esploso" | "montaggio";
+  kind: SavedViewKind;
   isolatePartIds: string[];
+  visibleNames: string[];
   explode: number;
   createdAt: string;
+};
+
+/** Pacchetto inviato da Solid Edge (add-in / Pubblica in officina). */
+export type SolidEdgeManifest = {
+  jobCode: string;
+  clientName: string;
+  title: string;
+  revision?: number;
+  notes?: string;
+  source: {
+    application: "Solid Edge";
+    document: string;
+    fullPath?: string;
+  };
+  assembly?: AssemblyTree;
+  configurations: Array<{
+    name: string;
+    visibleNames: string[];
+    explode?: number;
+  }>;
 };
 
 export type ProjectDetail = {

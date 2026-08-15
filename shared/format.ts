@@ -35,7 +35,7 @@ export function uploadRejectionMessage(kind: CadKind, fileName: string): string 
   if (kind === "step") return null;
   if (kind === "iges" || kind === "brep") return null;
   if (kind === "native-cad") {
-    return `${fileName} è un file nativo CAD (Solid Edge / analoghi) e non può essere aperto direttamente. Da Solid Edge: File → Salva con nome → STEP (*.stp).`;
+    return `${fileName} è un nativo Solid Edge. Il server non lo apre: va pubblicato da Solid Edge con «Pubblica in officina» (publisher/Siderio.Publisher), che legge l'ASM tramite API Siemens e invia albero, configurazioni e STEP.`;
   }
   if (kind === "stl") {
     return "STL è una mesh senza albero assieme. Per officina e revisioni pubblica un STEP.";
