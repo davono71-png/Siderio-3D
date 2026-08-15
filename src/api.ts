@@ -1,4 +1,4 @@
-import type { CreateProjectInput, Project, ProjectDetail, ViewerPayload } from "../shared/types";
+import type { CreateProjectInput, Project, ProjectDetail, SavedView, SolidEdgeManifest, ViewerPayload } from "../shared/types";
 
 async function readError(response: Response): Promise<string> {
   try {
@@ -42,4 +42,35 @@ export const api = {
       fetch(`/api/projects/${slug}/revisions`, { method: "POST", body }),
     );
   },
+  openPackage: async (manifest: SolidEdgeManifest, step: File) => {
+    const body = new FormData();
+    body.append("manifest", JSON.stringify(manifest));
+    body.append("step", step, step.name);
+    return json<{ project: Project; viewerUrl: string }>(fetch("/api/publish", { method: "POST", body }));
+  },
+  saveView: (
+    slug: string,
+    input: {
+      name: string;
+      kind?: "configurazione" | "foto";
+      visibleNames?: string[];
+      explode?: number;
+      camera?: SavedView["camera"];
+    },
+  ) =>
+    json<{ view: SavedView }>(
+      fetch(`/api/projects/${slug}/views`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(input),
+      }),
+    ),
+  savePartMaterials: (slug: string, assignments: Array<{ partId: string; materialId: string }>) =>
+    json<{ ok: boolean }>(
+      fetch(`/api/projects/${slug}/materials`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ assignments }),
+      }),
+    ),
 };

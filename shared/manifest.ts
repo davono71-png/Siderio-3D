@@ -1,4 +1,5 @@
-import type { AssemblyTree, SolidEdgeManifest } from "./types";
+import type { AssemblyPart, AssemblyTree, SolidEdgeManifest } from "./types";
+import { parsePartMaterial } from "./material";
 
 export function parseSolidEdgeManifest(raw: unknown): SolidEdgeManifest {
   if (!raw || typeof raw !== "object") {
@@ -41,5 +42,17 @@ export function parseSolidEdgeManifest(raw: unknown): SolidEdgeManifest {
 function isAssembly(value: unknown): value is AssemblyTree {
   if (!value || typeof value !== "object") return false;
   const tree = value as AssemblyTree;
-  return Boolean(tree.root && Array.isArray(tree.parts));
+  if (!tree.root || !Array.isArray(tree.parts)) return false;
+  tree.parts = tree.parts.map(parseAssemblyPart);
+  return true;
+}
+
+function parseAssemblyPart(part: AssemblyPart): AssemblyPart {
+  return {
+    id: part.id,
+    name: part.name,
+    triangleCount: part.triangleCount,
+    color: part.color,
+    material: parsePartMaterial((part as AssemblyPart).material),
+  };
 }

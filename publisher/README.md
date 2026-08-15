@@ -38,7 +38,9 @@ Poi lancia `bin\Release\net8.0-windows\Siderio.Publisher.exe`.
 4. **Leggi assieme aperto** → controlla commessa / cliente / titolo.
 5. **Pubblica in officina**.
 
-Il programma usa solo COM ufficiale (`SolidEdge.Application`, occorrenze, configurazioni, `SaveAs`). Non c’è un parser `.asm` scritto da noi.
+Il programma usa solo COM ufficiale (`SolidEdge.Application`, occorrenze, configurazioni, tabella materiali `GetMaterialTable`, `SaveAs`). Non c’è un parser `.asm` scritto da noi.
+
+Oltre alle configurazioni, esporta per ogni occorrenza il **materiale della tabella Solid Edge** (nome, densità, opacità e colore dello stile faccia). Il viewer non indovina vetro o acciaio dal nome del file.
 
 Le configurazioni Solid Edge (Completo, Solo carpenteria, Senza carter, Montaggio…) arrivano nel viewer come pulsanti.
 

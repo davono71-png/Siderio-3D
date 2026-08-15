@@ -2,8 +2,8 @@ import Fastify from "fastify";
 import cors from "@fastify/cors";
 import multipart from "@fastify/multipart";
 import fastifyStatic from "@fastify/static";
-import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, statSync } from "node:fs";
+import { join, relative, resolve } from "node:path";
 import { PORT, ROOT_DIR } from "./config";
 import { registerRoutes } from "./routes";
 import { seedDemoIfEmpty } from "./seed";
@@ -28,11 +28,20 @@ const webDir = join(ROOT_DIR, "dist");
 if (existsSync(webDir)) {
   await app.register(fastifyStatic, {
     root: webDir,
-    wildcard: false,
+    serve: false,
   });
-  app.setNotFoundHandler((request, reply) => {
+  const webRoot = resolve(webDir);
+  app.get("/*", (request, reply) => {
     if (request.url.startsWith("/api/")) {
       return reply.code(404).send({ error: "Non trovato." });
+    }
+    const urlPath = decodeURIComponent(request.url.split("?")[0]).replace(/^\/+/, "");
+    if (urlPath) {
+      const abs = resolve(webDir, urlPath);
+      const rel = relative(webRoot, abs);
+      if (rel && !rel.startsWith("..") && !rel.startsWith("/") && existsSync(abs) && statSync(abs).isFile()) {
+        return reply.sendFile(rel.split("\\").join("/"));
+      }
     }
     return reply.sendFile("index.html");
   });

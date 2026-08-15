@@ -1,61 +1,178 @@
-using System.Net.Http.Headers;
-using System.Text;
+using System.Diagnostics;
 using System.Text.Json.Nodes;
 
 namespace Siderio.Publisher;
 
 public sealed class MainForm : Form
 {
-    private readonly TextBox _server = new() { Text = "http://127.0.0.1:3000" };
+    private readonly TextBox _folder = new();
+    private readonly Button _browse = new() { Text = "Sfoglia…" };
     private readonly TextBox _job = new();
     private readonly TextBox _client = new();
     private readonly TextBox _title = new();
     private readonly TextBox _notes = new();
     private readonly TextBox _log = new() { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical };
-    private readonly Button _read = new() { Text = "Leggi assieme aperto", Width = 180 };
-    private readonly Button _publish = new() { Text = "Pubblica in officina", Width = 180 };
+    private readonly Button _read = new() { Text = "1. Leggi assieme aperto" };
+    private readonly Button _export = new() { Text = "2. Esporta cartella" };
 
     public MainForm()
     {
-        Text = "Siderio — Pubblica in officina";
-        Width = 640;
-        Height = 560;
-        Font = new Font("Segoe UI", 10);
-        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, Padding = new Padding(12) };
-        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 140));
-        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        AddRow(layout, "Server Siderio", _server);
-        AddRow(layout, "Commessa", _job);
-        AddRow(layout, "Cliente", _client);
-        AddRow(layout, "Titolo", _title);
-        AddRow(layout, "Note", _notes);
-        var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill };
-        buttons.Controls.Add(_read);
-        buttons.Controls.Add(_publish);
-        layout.Controls.Add(buttons, 0, 5);
-        layout.SetColumnSpan(buttons, 2);
-        _log.Dock = DockStyle.Fill;
-        layout.Controls.Add(_log, 0, 6);
-        layout.SetColumnSpan(_log, 2);
-        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
-        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
-        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
-        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
-        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
-        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
-        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        Controls.Add(layout);
+        Text = "Siderio — Esporta visualizzazione";
+        AutoScaleMode = AutoScaleMode.Dpi;
+        MinimumSize = new Size(860, 720);
+        Size = new Size(920, 760);
+        StartPosition = FormStartPosition.CenterScreen;
+        Font = new Font("Segoe UI", 12f);
+        BackColor = Color.FromArgb(18, 21, 26);
+        ForeColor = Color.FromArgb(232, 237, 242);
+        Padding = new Padding(20);
 
+        var root = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 1,
+            RowCount = 3,
+            GrowStyle = TableLayoutPanelGrowStyle.FixedSize,
+        };
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 96));
+        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+
+        root.Controls.Add(BuildFields(), 0, 0);
+        root.Controls.Add(BuildButtons(), 0, 1);
+        StyleLog(_log);
+        root.Controls.Add(_log, 0, 2);
+        Controls.Add(root);
+
+        _browse.Click += (_, _) => BrowseFolder();
         _read.Click += (_, _) => ReadAssembly();
-        _publish.Click += async (_, _) => await PublishAsync();
+        _export.Click += (_, _) => ExportPackage();
+        Log("Scegli la cartella di destinazione. Solid Edge deve essere aperto sull'assieme.");
     }
 
-    private static void AddRow(TableLayoutPanel layout, string label, Control field)
+    private Control BuildFields()
     {
-        var row = layout.RowCount++;
-        layout.Controls.Add(new Label { Text = label, TextAlign = ContentAlignment.MiddleLeft, Dock = DockStyle.Fill }, 0, row);
+        var fields = new TableLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            AutoSize = true,
+            ColumnCount = 2,
+            Padding = new Padding(0, 0, 0, 8),
+        };
+        fields.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 210));
+        fields.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+
+        var folderRow = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, Height = 40 };
+        folderRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        folderRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        StyleField(_folder);
+        StyleSecondary(_browse);
+        _folder.Dock = DockStyle.Fill;
+        folderRow.Controls.Add(_folder, 0, 0);
+        folderRow.Controls.Add(_browse, 1, 0);
+
+        AddField(fields, "Cartella di destinazione", folderRow);
+        AddField(fields, "Commessa", StyleField(_job));
+        AddField(fields, "Cliente", StyleField(_client));
+        AddField(fields, "Titolo", StyleField(_title));
+        AddField(fields, "Note", StyleField(_notes));
+        return fields;
+    }
+
+    private Control BuildButtons()
+    {
+        var buttons = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            WrapContents = false,
+            Padding = new Padding(0, 12, 0, 12),
+        };
+        StylePrimary(_read);
+        StylePrimary(_export);
+        buttons.Controls.Add(_read);
+        buttons.Controls.Add(_export);
+        return buttons;
+    }
+
+    private static void AddField(TableLayoutPanel fields, string caption, Control field)
+    {
+        var row = fields.RowCount++;
+        fields.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
+        var label = new Label
+        {
+            Text = caption,
+            Dock = DockStyle.Fill,
+            TextAlign = ContentAlignment.MiddleLeft,
+            ForeColor = Color.FromArgb(232, 237, 242),
+            AutoSize = false,
+        };
         field.Dock = DockStyle.Fill;
-        layout.Controls.Add(field, 1, row);
+        fields.Controls.Add(label, 0, row);
+        fields.Controls.Add(field, 1, row);
+    }
+
+    private static TextBox StyleField(TextBox box)
+    {
+        box.BackColor = Color.FromArgb(15, 18, 22);
+        box.ForeColor = Color.FromArgb(232, 237, 242);
+        box.BorderStyle = BorderStyle.FixedSingle;
+        box.Font = new Font("Segoe UI", 12f);
+        return box;
+    }
+
+    private static void StylePrimary(Button button)
+    {
+        button.AutoSize = true;
+        button.MinimumSize = new Size(280, 52);
+        button.Padding = new Padding(16, 8, 16, 8);
+        button.Margin = new Padding(0, 0, 16, 0);
+        button.Font = new Font("Segoe UI", 12f, FontStyle.Bold);
+        button.BackColor = Color.FromArgb(215, 164, 65);
+        button.ForeColor = Color.FromArgb(26, 20, 8);
+        button.FlatStyle = FlatStyle.Flat;
+        button.FlatAppearance.BorderSize = 0;
+        button.UseVisualStyleBackColor = false;
+        button.Cursor = Cursors.Hand;
+    }
+
+    private static void StyleSecondary(Button button)
+    {
+        button.AutoSize = true;
+        button.MinimumSize = new Size(130, 40);
+        button.Margin = new Padding(8, 0, 0, 0);
+        button.Font = new Font("Segoe UI", 11f, FontStyle.Bold);
+        button.BackColor = Color.FromArgb(58, 66, 76);
+        button.ForeColor = Color.FromArgb(232, 237, 242);
+        button.FlatStyle = FlatStyle.Flat;
+        button.FlatAppearance.BorderSize = 0;
+        button.UseVisualStyleBackColor = false;
+        button.Cursor = Cursors.Hand;
+    }
+
+    private static void StyleLog(TextBox log)
+    {
+        log.BackColor = Color.FromArgb(12, 14, 18);
+        log.ForeColor = Color.FromArgb(200, 210, 220);
+        log.BorderStyle = BorderStyle.FixedSingle;
+        log.Font = new Font("Consolas", 11f);
+        log.Dock = DockStyle.Fill;
+    }
+
+    private void BrowseFolder()
+    {
+        using var dialog = new FolderBrowserDialog
+        {
+            Description = "Scegli dove creare la cartella del pacchetto Siderio",
+            UseDescriptionForTitle = true,
+        };
+        if (!string.IsNullOrWhiteSpace(_folder.Text) && Directory.Exists(_folder.Text))
+        {
+            dialog.SelectedPath = _folder.Text;
+        }
+        if (dialog.ShowDialog(this) == DialogResult.OK)
+        {
+            _folder.Text = dialog.SelectedPath;
+        }
     }
 
     private void ReadAssembly()
@@ -66,7 +183,7 @@ public sealed class MainForm : Form
             if (string.IsNullOrWhiteSpace(_job.Text)) _job.Text = draft.JobCode;
             if (string.IsNullOrWhiteSpace(_client.Text)) _client.Text = draft.ClientName;
             if (string.IsNullOrWhiteSpace(_title.Text)) _title.Text = draft.Title;
-            Log($"Letto {draft.DocumentName}: {draft.Occurrences.Count} occorrenze, {draft.Configurations.Count} configurazioni.");
+            Log($"Letto {draft.DocumentName}: {draft.Occurrences.Count} occorrenze, {draft.Configurations.Count} configurazioni, {draft.Occurrences.Count(o => o.Material != null)} materiali.");
         }
         catch (Exception ex)
         {
@@ -75,57 +192,65 @@ public sealed class MainForm : Form
         }
     }
 
-    private async Task PublishAsync()
+    private void ExportPackage()
     {
         if (string.IsNullOrWhiteSpace(_job.Text) || string.IsNullOrWhiteSpace(_client.Text) || string.IsNullOrWhiteSpace(_title.Text))
         {
             MessageBox.Show("Compila commessa, cliente e titolo.", "Siderio");
             return;
         }
+        if (string.IsNullOrWhiteSpace(_folder.Text))
+        {
+            MessageBox.Show("Scegli la cartella di destinazione.", "Siderio");
+            return;
+        }
 
-        _publish.Enabled = false;
+        _export.Enabled = false;
         try
         {
             Log("Lettura assieme da Solid Edge…");
             var draft = SolidEdgeBridge.ReadActiveAssembly();
-            var work = Path.Combine(Path.GetTempPath(), "siderio-publish", Guid.NewGuid().ToString("N"));
-            Directory.CreateDirectory(work);
-            var stepPath = Path.Combine(work, Path.ChangeExtension(draft.DocumentName, ".stp"));
+            var dest = CreatePackageDirectory(_folder.Text.Trim(), _job.Text.Trim(), draft.DocumentName);
+            Directory.CreateDirectory(dest);
+            var stepPath = Path.Combine(dest, "model.stp");
             Log("Esportazione STEP ufficiale (SaveAs)…");
             SolidEdgeBridge.ExportActiveAssemblyToStep(stepPath);
 
             var manifest = SolidEdgeBridge.ToManifest(draft, _job.Text.Trim(), _client.Text.Trim(), _title.Text.Trim(), _notes.Text.Trim());
-            await SendAsync(_server.Text.Trim().TrimEnd('/'), stepPath, manifest);
-            Log("Pubblicato. Il QR della commessa punta già a questa revisione.");
-            MessageBox.Show("Modello pubblicato in officina.", "Siderio");
+            manifest["files"] = new JsonObject
+            {
+                ["step"] = "model.stp",
+                ["manifest"] = "siderio.json",
+            };
+            File.WriteAllText(Path.Combine(dest, "siderio.json"), JsonUtil.Serialize(manifest));
+            Log($"Esportato in:{Environment.NewLine}{dest}");
+            Log($"Configurazioni: {draft.Configurations.Count}. Materiali: {draft.Occurrences.Count(o => o.Material != null)}. Apri questa cartella da Siderio (Apri pacchetto).");
+            try { Process.Start("explorer.exe", dest); } catch { /* explorer opzionale */ }
+            MessageBox.Show($"Cartella creata:\n{dest}", "Siderio");
         }
         catch (Exception ex)
         {
             Log(ex.Message);
-            MessageBox.Show(ex.Message, "Pubblicazione", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            MessageBox.Show(ex.Message, "Esportazione", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
         finally
         {
-            _publish.Enabled = true;
+            _export.Enabled = true;
         }
     }
 
-    private async Task SendAsync(string server, string stepPath, JsonObject manifest)
+    internal static string CreatePackageDirectory(string parent, string jobCode, string documentName)
     {
-        using var client = new HttpClient { Timeout = TimeSpan.FromMinutes(30) };
-        using var form = new MultipartFormDataContent();
-        form.Add(new StringContent(JsonUtil.Serialize(manifest), Encoding.UTF8, "application/json"), "manifest");
-        var bytes = await File.ReadAllBytesAsync(stepPath);
-        var file = new ByteArrayContent(bytes);
-        file.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
-        form.Add(file, "step", Path.GetFileName(stepPath));
-        var response = await client.PostAsync($"{server}/api/publish", form);
-        var body = await response.Content.ReadAsStringAsync();
-        if (!response.IsSuccessStatusCode)
+        var stem = Path.GetFileNameWithoutExtension(documentName);
+        if (string.IsNullOrWhiteSpace(stem)) stem = "assieme";
+        var raw = $"{jobCode}_{stem}";
+        foreach (var invalid in Path.GetInvalidFileNameChars())
         {
-            throw new InvalidOperationException($"Server {response.StatusCode}: {body}");
+            raw = raw.Replace(invalid, '-');
         }
-        Log(body);
+        raw = raw.Replace('/', '-').Replace('\\', '-').Trim('-');
+        if (raw.Length == 0) raw = "siderio-pacchetto";
+        return Path.Combine(parent, raw);
     }
 
     private void Log(string message)

@@ -6,6 +6,8 @@ import QRCode from "qrcode";
 import { detectCadKind, uploadRejectionMessage } from "../shared/format";
 import { parseSolidEdgeManifest } from "../shared/manifest";
 import { formatRevision, jobToSlug, paperRevisionWarning, parseRevisionLabel } from "../shared/slug";
+import { catalogToPartMaterial, getMaterial, isCameraPose, isMaterialId } from "../shared/material";
+import { configNameError } from "../shared/view";
 import type { CreateProjectInput, ProjectDetail, ViewerPayload } from "../shared/types";
 import { PUBLIC_URL, STORAGE_DIR } from "./config";
 import {
@@ -14,14 +16,15 @@ import {
   getRevision,
   insertProject,
   insertRevision,
-  insertView,
-  listProjects,
-  listRevisions,
-  listViews,
-  nextRevisionNumber,
-  publishRevision,
-  readAssembly,
-} from "./db";
+    insertView,
+    listProjects,
+    listRevisions,
+    listViews,
+    nextRevisionNumber,
+    publishRevision,
+    readAssembly,
+    writeAssembly,
+  } from "./db";
 import { processCadFile } from "./processor";
 
 function publicBase(request: FastifyRequest): string {
@@ -91,10 +94,79 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       revision,
       assembly: readAssembly(revision),
       glbUrl: `/api/projects/${project.slug}/glb`,
-      views: listViews(project.id),
+      views: listViews(project.id).filter(
+        (view) =>
+          !view.revisionId ||
+          view.revisionId === revision.id ||
+          view.kind === "configurazione" ||
+          view.kind === "foto",
+      ),
       paperWarning: paperRevisionWarning(parseRevisionLabel(query.carta ?? null), revision.revision),
     };
     return payload;
+  });
+
+  app.post("/api/projects/:slug/views", async (request, reply) => {
+    const { slug } = request.params as { slug: string };
+    const project = getProjectBySlug(slug);
+    if (!project) return reply.code(404).send({ error: "Commessa non trovata." });
+    const body = request.body as {
+      name?: string;
+      kind?: string;
+      visibleNames?: unknown;
+      explode?: unknown;
+      camera?: unknown;
+    };
+    const nameError = configNameError(body.name ?? "");
+    if (nameError) return reply.code(400).send({ error: nameError });
+    const revision = getPublishedRevision(project.id);
+    const isFoto = body.kind === "foto";
+    if (isFoto && !isCameraPose(body.camera)) {
+      return reply.code(400).send({ error: "La foto deve includere il punto di vista." });
+    }
+    const visibleNames = Array.isArray(body.visibleNames)
+      ? body.visibleNames.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+      : [];
+    const explode = typeof body.explode === "number" && Number.isFinite(body.explode) ? body.explode : 0;
+    const view = {
+      id: randomUUID(),
+      projectId: project.id,
+      revisionId: revision?.id ?? null,
+      name: (body.name ?? "").trim(),
+      kind: isFoto ? ("foto" as const) : ("configurazione" as const),
+      isolatePartIds: [] as string[],
+      visibleNames: isFoto ? [] : visibleNames,
+      explode: isFoto ? 0 : Math.min(1, Math.max(0, explode)),
+      camera: isFoto && isCameraPose(body.camera) ? body.camera : null,
+      createdAt: new Date().toISOString(),
+    };
+    insertView(view);
+    return { view };
+  });
+
+  app.patch("/api/projects/:slug/materials", async (request, reply) => {
+    const { slug } = request.params as { slug: string };
+    const project = getProjectBySlug(slug);
+    if (!project) return reply.code(404).send({ error: "Commessa non trovata." });
+    const revision = getPublishedRevision(project.id);
+    if (!revision) return reply.code(409).send({ error: "Nessuna revisione pubblicata." });
+    const body = request.body as { assignments?: unknown };
+    if (!Array.isArray(body.assignments) || body.assignments.length === 0) {
+      return reply.code(400).send({ error: "Servono le assegnazioni materiale." });
+    }
+    const assembly = readAssembly(revision);
+    for (const item of body.assignments) {
+      if (!item || typeof item !== "object") continue;
+      const row = item as { partId?: unknown; materialId?: unknown };
+      if (typeof row.partId !== "string" || !isMaterialId(row.materialId)) {
+        return reply.code(400).send({ error: "Materiale non valido." });
+      }
+      const part = assembly.parts.find((entry) => entry.id === row.partId);
+      if (!part) continue;
+      part.material = catalogToPartMaterial(getMaterial(row.materialId));
+    }
+    writeAssembly(revision, assembly);
+    return { ok: true, assembly };
   });
 
   app.get("/api/projects/:slug/glb", async (request, reply) => {
@@ -218,13 +290,15 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       if (part.type === "file" && (part.fieldname === "step" || part.fieldname === "file")) {
         stepName = part.filename || stepName;
         stepBytes = await part.toBuffer();
+      } else if (part.type === "file" && (part.fieldname === "manifest" || /siderio\.json$/i.test(part.filename))) {
+        manifestRaw = JSON.parse(Buffer.from(await part.toBuffer()).toString("utf8"));
       } else if (part.type === "field" && part.fieldname === "manifest") {
         manifestRaw = JSON.parse(String(part.value));
       }
     }
 
     if (!stepBytes) {
-      return reply.code(400).send({ error: "Il pubblicatore deve inviare lo STEP esportato da Solid Edge." });
+      return reply.code(400).send({ error: "Nel pacchetto manca lo STEP (model.stp)." });
     }
     let manifest;
     try {

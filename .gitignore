@@ -7,3 +7,7 @@ data
 coverage
 .env
 *.db
+.vercel
+publisher/**/bin/
+publisher/**/obj/
+publisher/dist/

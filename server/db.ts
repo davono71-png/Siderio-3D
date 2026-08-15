@@ -1,20 +1,15 @@
 import Database from "better-sqlite3";
-import { mkdirSync, readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { DB_PATH } from "./config";
 import type { AssemblyTree, ModelRevision, Project, SavedView } from "../shared/types";
+import { isCameraPose } from "../shared/material";
 
 mkdirSync(dirname(DB_PATH), { recursive: true });
 
 export const db = new Database(DB_PATH);
 db.pragma("journal_mode = WAL");
 db.pragma("foreign_keys = ON");
-
-try {
-  db.exec("ALTER TABLE saved_views ADD COLUMN visible_names TEXT NOT NULL DEFAULT '[]'");
-} catch {
-  // colonna già presente
-}
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS projects (
@@ -53,6 +48,7 @@ CREATE TABLE IF NOT EXISTS saved_views (
   isolate_part_ids TEXT NOT NULL DEFAULT '[]',
   visible_names TEXT NOT NULL DEFAULT '[]',
   explode REAL NOT NULL DEFAULT 0,
+  camera TEXT,
   created_at TEXT NOT NULL,
   FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
 );
@@ -68,6 +64,17 @@ CREATE TABLE IF NOT EXISTS share_links (
   FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
 );
 `);
+
+try {
+  db.exec("ALTER TABLE saved_views ADD COLUMN visible_names TEXT NOT NULL DEFAULT '[]'");
+} catch {
+  // colonna già presente
+}
+try {
+  db.exec("ALTER TABLE saved_views ADD COLUMN camera TEXT");
+} catch {
+  // colonna già presente
+}
 
 type ProjectRow = {
   id: string;
@@ -104,6 +111,7 @@ type ViewRow = {
   visible_names: string;
   explode: number;
   created_at: string;
+  camera: string | null;
 };
 
 export function mapProject(row: ProjectRow): Project {
@@ -136,6 +144,15 @@ export function mapRevision(row: RevisionRow): ModelRevision {
 }
 
 export function mapView(row: ViewRow): SavedView {
+  let camera: SavedView["camera"] = null;
+  if (row.camera) {
+    try {
+      const parsed: unknown = JSON.parse(row.camera);
+      if (isCameraPose(parsed)) camera = parsed;
+    } catch {
+      camera = null;
+    }
+  }
   return {
     id: row.id,
     projectId: row.project_id,
@@ -145,6 +162,7 @@ export function mapView(row: ViewRow): SavedView {
     isolatePartIds: JSON.parse(row.isolate_part_ids) as string[],
     visibleNames: JSON.parse(row.visible_names || "[]") as string[],
     explode: row.explode,
+    camera,
     createdAt: row.created_at,
   };
 }
@@ -232,12 +250,13 @@ export function listViews(projectId: string): SavedView[] {
 
 export function insertView(view: SavedView): void {
   db.prepare(
-    `INSERT INTO saved_views (id, project_id, revision_id, name, kind, isolate_part_ids, visible_names, explode, created_at)
-     VALUES (@id, @projectId, @revisionId, @name, @kind, @isolatePartIds, @visibleNames, @explode, @createdAt)`,
+    `INSERT INTO saved_views (id, project_id, revision_id, name, kind, isolate_part_ids, visible_names, explode, camera, created_at)
+     VALUES (@id, @projectId, @revisionId, @name, @kind, @isolatePartIds, @visibleNames, @explode, @camera, @createdAt)`,
   ).run({
     ...view,
     isolatePartIds: JSON.stringify(view.isolatePartIds),
     visibleNames: JSON.stringify(view.visibleNames ?? []),
+    camera: view.camera ? JSON.stringify(view.camera) : null,
   });
 }
 
@@ -246,4 +265,11 @@ export function readAssembly(revision: ModelRevision): AssemblyTree {
     throw new Error("Revisione senza albero assieme");
   }
   return JSON.parse(readFileSync(revision.assemblyPath, "utf8")) as AssemblyTree;
+}
+
+export function writeAssembly(revision: ModelRevision, assembly: AssemblyTree): void {
+  if (!revision.assemblyPath) {
+    throw new Error("Revisione senza albero assieme");
+  }
+  writeFileSync(revision.assemblyPath, JSON.stringify(assembly, null, 2));
 }

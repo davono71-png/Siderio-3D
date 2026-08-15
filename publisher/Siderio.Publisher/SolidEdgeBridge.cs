@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -24,7 +25,10 @@ public static class SolidEdgeBridge
             throw new InvalidOperationException("Il documento attivo non è un assieme (.ASM).");
         }
 
-        var occurrences = WalkOccurrences(doc.Occurrences, "");
+        object? matTable = null;
+        try { matTable = app.GetMaterialTable(); } catch { /* versioni senza tabella */ }
+
+        var occurrences = WalkOccurrences(app, matTable, (object)doc.Occurrences, "", readMaterial: true);
         var configurations = ReadConfigurations(doc, occurrences);
 
         return new PublishDraft
@@ -61,13 +65,26 @@ public static class SolidEdgeBridge
         var rootChildren = new JsonArray();
         foreach (var occ in draft.Occurrences)
         {
-            parts.Add(new JsonObject
+            var color = occ.Color ?? [0.72, 0.75, 0.78];
+            var part = new JsonObject
             {
                 ["id"] = occ.Id,
                 ["name"] = occ.Name,
                 ["triangleCount"] = 0,
-                ["color"] = new JsonArray(0.72, 0.75, 0.78),
-            });
+                ["color"] = new JsonArray(color[0], color[1], color[2]),
+            };
+            if (occ.Material != null)
+            {
+                var material = new JsonObject { ["name"] = occ.Material.Name };
+                if (occ.Material.Density is { } density) material["density"] = density;
+                if (occ.Material.Opacity is { } opacity) material["opacity"] = opacity;
+                if (occ.Color != null)
+                {
+                    material["color"] = new JsonArray(occ.Color[0], occ.Color[1], occ.Color[2]);
+                }
+                part["material"] = material;
+            }
+            parts.Add(part);
             rootChildren.Add(new JsonObject
             {
                 ["id"] = occ.Id,
@@ -127,8 +144,14 @@ public static class SolidEdgeBridge
         return instance;
     }
 
-    private static List<OccurrenceInfo> WalkOccurrences(dynamic occurrences, string prefix)
+    private static List<OccurrenceInfo> WalkOccurrences(
+        dynamic app,
+        object? matTable,
+        object occurrencesObj,
+        string prefix,
+        bool readMaterial)
     {
+        dynamic occurrences = occurrencesObj;
         var list = new List<OccurrenceInfo>();
         int count = occurrences.Count;
         for (int i = 1; i <= count; i++)
@@ -138,13 +161,19 @@ public static class SolidEdgeBridge
             string id = string.IsNullOrEmpty(prefix) ? name : $"{prefix}/{name}";
             bool visible = true;
             try { visible = Convert.ToBoolean(occ.Visible); } catch { /* alcune occorrenze non espongono Visible */ }
-            list.Add(new OccurrenceInfo { Id = id, Name = name, Visible = visible });
+            var info = new OccurrenceInfo { Id = id, Name = name, Visible = visible };
+            if (readMaterial) ReadOccurrenceMaterial(app, matTable, occ, info);
+            list.Add(info);
             try
             {
-                dynamic sub = occ.Suboccurrences;
-                if (sub != null && sub.Count > 0)
+                object? sub = occ.Suboccurrences;
+                if (sub != null)
                 {
-                    list.AddRange(WalkOccurrences(sub, id));
+                    dynamic subDyn = sub;
+                    if (subDyn.Count > 0)
+                    {
+                        list.AddRange(WalkOccurrences(app, matTable, sub, id, readMaterial));
+                    }
                 }
             }
             catch
@@ -153,6 +182,222 @@ public static class SolidEdgeBridge
             }
         }
         return list;
+    }
+
+    private static void ReadOccurrenceMaterial(dynamic app, object? matTable, dynamic occ, OccurrenceInfo info)
+    {
+        object? doc = null;
+        try { doc = occ.OccurrenceDocument; } catch { /* occorrenza senza documento */ }
+
+        string? matName = null;
+        if (matTable != null && doc != null)
+        {
+            matName = InvokeOutString(matTable, "GetCurrentMaterialName", doc);
+        }
+
+        double? density = null;
+        if (matTable != null && !string.IsNullOrWhiteSpace(matName))
+        {
+            density = ToGcm3(InvokeOutNumber(matTable, "GetMatPropValue", matName, 23));
+        }
+        if (density == null && doc != null)
+        {
+            density = ReadDensityVariable(doc);
+        }
+
+        object? style = null;
+        try { style = occ.FaceStyle; } catch { /* nessuno stile in assieme */ }
+        if (style == null && matTable != null && !string.IsNullOrWhiteSpace(matName) && doc != null)
+        {
+            var styleName = InvokeOutString(matTable, "GetMatPropValue", matName, 20);
+            if (!string.IsNullOrWhiteSpace(styleName)) style = FindFaceStyle(doc, app, styleName);
+        }
+        if (style == null && doc != null) style = ReadBodyFaceStyle(doc);
+
+        double? opacity = null;
+        double[]? color = null;
+        if (style != null)
+        {
+            try { opacity = Convert.ToDouble(((dynamic)style).Opacity); } catch { /* opacity assente */ }
+            color = ReadStyleColor(style);
+        }
+
+        if (string.IsNullOrWhiteSpace(matName) && density == null && opacity == null && color == null) return;
+        info.Material = new MaterialInfo
+        {
+            Name = matName?.Trim() ?? "",
+            Density = density,
+            Opacity = opacity is >= 0 and <= 1 ? opacity : opacity is > 1 and <= 100 ? opacity / 100.0 : opacity,
+        };
+        info.Color = color;
+    }
+
+    private static double? ReadDensityVariable(object doc)
+    {
+        try
+        {
+            dynamic variables = ((dynamic)doc).Variables;
+            foreach (var key in new[] { "PhysicalProperties_Density", "Density", "Densità" })
+            {
+                try
+                {
+                    dynamic variable = variables.Item(key);
+                    return ToGcm3(Convert.ToDouble(variable.Value));
+                }
+                catch { /* variabile assente */ }
+            }
+        }
+        catch { /* niente tabella variabili */ }
+        return null;
+    }
+
+    private static object? FindFaceStyle(object doc, dynamic app, string styleName)
+    {
+        foreach (var source in new object?[] { doc, TryGet(() => (object)app.ActiveDocument) })
+        {
+            if (source == null) continue;
+            try
+            {
+                dynamic styles = ((dynamic)source).FaceStyles;
+                try { return styles.Item(styleName); } catch { /* nome non in questa collezione */ }
+                int count = styles.Count;
+                for (int i = 1; i <= count; i++)
+                {
+                    dynamic item = styles.Item(i);
+                    var name = SafeString(() => item.StyleName) ?? SafeString(() => item.Name);
+                    if (string.Equals(name, styleName, StringComparison.OrdinalIgnoreCase)) return item;
+                }
+            }
+            catch { /* documento senza FaceStyles */ }
+        }
+        return null;
+    }
+
+    private static object? ReadBodyFaceStyle(object doc)
+    {
+        try
+        {
+            dynamic models = ((dynamic)doc).Models;
+            if (models.Count < 1) return null;
+            dynamic body = models.Item(1).Body;
+            try { return body.Style; } catch { return body.FaceStyle; }
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static double[]? ReadStyleColor(object style)
+    {
+        try
+        {
+            dynamic s = style;
+            var r = ColorComponent(TryNumber(() => s.DiffuseRed) ?? TryNumber(() => s.AmbientRed));
+            var g = ColorComponent(TryNumber(() => s.DiffuseGreen) ?? TryNumber(() => s.AmbientGreen));
+            var b = ColorComponent(TryNumber(() => s.DiffuseBlue) ?? TryNumber(() => s.AmbientBlue));
+            if (r == null || g == null || b == null) return null;
+            return [r.Value, g.Value, b.Value];
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static double? ColorComponent(double? value)
+    {
+        if (value == null || !double.IsFinite(value.Value)) return null;
+        var n = value.Value;
+        if (n > 1.5) n /= 255.0;
+        return Math.Clamp(n, 0, 1);
+    }
+
+    /// <summary>SE usa spesso kg/m³ (7850); in Siderio la densità è g/cm³ (7.85).</summary>
+    private static double? ToGcm3(double? raw)
+    {
+        if (raw == null || !double.IsFinite(raw.Value) || raw.Value <= 0) return null;
+        var value = raw.Value;
+        if (value > 50) value /= 1000.0;
+        return value is > 0.01 and < 30 ? value : null;
+    }
+
+    private static string? InvokeOutString(object target, string method, params object?[] inputs)
+    {
+        var value = InvokeOut(target, method, inputs);
+        var text = value?.ToString()?.Trim();
+        return string.IsNullOrWhiteSpace(text) ? null : text;
+    }
+
+    private static double? InvokeOutNumber(object target, string method, params object?[] inputs)
+    {
+        var value = InvokeOut(target, method, inputs);
+        try
+        {
+            if (value == null) return null;
+            return Convert.ToDouble(value);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static object? InvokeOut(object target, string method, object?[] inputs)
+    {
+        var args = new object?[inputs.Length + 1];
+        inputs.CopyTo(args, 0);
+        args[^1] = "";
+        var mods = new ParameterModifier[1];
+        mods[0] = new ParameterModifier(args.Length);
+        mods[0][args.Length - 1] = true;
+        try
+        {
+            target.GetType().InvokeMember(
+                method,
+                BindingFlags.InvokeMethod | BindingFlags.Public | BindingFlags.Instance,
+                null,
+                target,
+                args!,
+                mods,
+                null,
+                null);
+            return args[^1];
+        }
+        catch
+        {
+            try
+            {
+                return target.GetType().InvokeMember(
+                    method,
+                    BindingFlags.InvokeMethod | BindingFlags.Public | BindingFlags.Instance,
+                    null,
+                    target,
+                    inputs!);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+    }
+
+    private static object? TryGet(Func<object?> getter)
+    {
+        try { return getter(); } catch { return null; }
+    }
+
+    private static double? TryNumber(Func<object?> getter)
+    {
+        try
+        {
+            var value = getter();
+            return value == null ? null : Convert.ToDouble(value);
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private static List<ConfigurationInfo> ReadConfigurations(dynamic doc, List<OccurrenceInfo> fallback)
@@ -168,7 +413,8 @@ public static class SolidEdgeBridge
                 dynamic cfg = configs.Item(i);
                 string name = SafeString(() => cfg.Name) ?? $"CFG_{i}";
                 try { cfg.Apply(); } catch { try { cfg.Activate(); } catch { /* versioni diverse */ } }
-                var visible = WalkOccurrences(doc.Occurrences, "")
+                var snapshot = WalkOccurrences(null!, null, (object)doc.Occurrences, "", readMaterial: false);
+                var visible = snapshot
                     .Where(o => o.Visible)
                     .Select(o => o.Name)
                     .Distinct()
@@ -231,6 +477,15 @@ public sealed class OccurrenceInfo
     public string Id { get; set; } = "";
     public string Name { get; set; } = "";
     public bool Visible { get; set; } = true;
+    public MaterialInfo? Material { get; set; }
+    public double[]? Color { get; set; }
+}
+
+public sealed class MaterialInfo
+{
+    public string Name { get; set; } = "";
+    public double? Density { get; set; }
+    public double? Opacity { get; set; }
 }
 
 public sealed class ConfigurationInfo

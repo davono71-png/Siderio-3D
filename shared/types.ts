@@ -1,3 +1,5 @@
+import type { MaterialId } from "./material";
+
 export type Project = {
   id: string;
   slug: string;
@@ -35,6 +37,18 @@ export type AssemblyPart = {
   name: string;
   triangleCount: number;
   color: [number, number, number];
+  /** Catalogo Siderio (acciaio, vetro, muri, …), non i valori importati da Solid Edge. */
+  material?: PartMaterial | null;
+};
+
+export type PartMaterial = {
+  id?: MaterialId;
+  name: string;
+  /** Densità in g/cm³. Null per i muri. */
+  density: number | null;
+  /** 1 = opaco, 0 = trasparente. */
+  opacity: number | null;
+  color?: [number, number, number] | null;
 };
 
 export type AssemblyTree = {
@@ -43,7 +57,15 @@ export type AssemblyTree = {
   parts: AssemblyPart[];
 };
 
-export type SavedViewKind = "generale" | "dettaglio" | "esploso" | "montaggio" | "configurazione";
+export type SavedViewKind = "generale" | "dettaglio" | "esploso" | "montaggio" | "configurazione" | "foto";
+
+export type CameraPose = {
+  position: [number, number, number];
+  target: [number, number, number];
+  up: [number, number, number];
+  ortho: boolean;
+  zoom: number;
+};
 
 export type SavedView = {
   id: string;
@@ -54,6 +76,7 @@ export type SavedView = {
   isolatePartIds: string[];
   visibleNames: string[];
   explode: number;
+  camera?: CameraPose | null;
   createdAt: string;
 };
 
