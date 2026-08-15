@@ -61,6 +61,7 @@ npm start
 ```
 
 All’avvio viene creata la commessa demo **26/0147 · ROSSI SPA · Scala ingresso · REV.03**.
+La geometria inclusa è un cubo STEP di prova (così il giro pubblicazione → QR → officina funziona subito). Dalla home si carica lo STEP vero della scala: quella diventa la revisione pubblicata.
 
 Sviluppo (due processi, sempre senza Docker):
 

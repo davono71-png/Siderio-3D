@@ -68,7 +68,7 @@ export async function seedDemoIfEmpty(): Promise<void> {
     published: false,
     superseded: false,
     createdAt: new Date().toISOString(),
-    notes: "Revisione corrente pubblicata per officina.",
+    notes: "Revisione corrente. Geometria di prova (cubo STEP): sostituire con lo STEP reale.",
     partCount: processed.partCount,
     triangleCount: processed.triangleCount,
   };
