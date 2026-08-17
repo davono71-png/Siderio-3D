@@ -183,7 +183,10 @@ public sealed class MainForm : Form
             if (string.IsNullOrWhiteSpace(_job.Text)) _job.Text = draft.JobCode;
             if (string.IsNullOrWhiteSpace(_client.Text)) _client.Text = draft.ClientName;
             if (string.IsNullOrWhiteSpace(_title.Text)) _title.Text = draft.Title;
-            Log($"Letto {draft.DocumentName}: {draft.Occurrences.Count} occorrenze, {draft.Configurations.Count} configurazioni, {draft.Occurrences.Count(o => o.Material != null)} materiali.");
+            var used = draft.UsedMaterialNames();
+            var usedText = used.Count == 0 ? "nessuno sulle parti" : string.Join(", ", used);
+            Log($"Letto {draft.DocumentName}: {draft.Occurrences.Count} occorrenze, {draft.Configurations.Count} configurazioni.");
+            Log($"Materiali (tabella SE, distinti): {used.Count} — {usedText}");
         }
         catch (Exception ex)
         {
@@ -224,7 +227,9 @@ public sealed class MainForm : Form
             };
             File.WriteAllText(Path.Combine(dest, "siderio.json"), JsonUtil.Serialize(manifest));
             Log($"Esportato in:{Environment.NewLine}{dest}");
-            Log($"Configurazioni: {draft.Configurations.Count}. Materiali: {draft.Occurrences.Count(o => o.Material != null)}. Apri questa cartella da Siderio (Apri pacchetto).");
+            var used = draft.UsedMaterialNames();
+            var usedText = used.Count == 0 ? "nessuno sulle parti" : string.Join(", ", used);
+            Log($"Configurazioni: {draft.Configurations.Count}. Materiali: {used.Count} ({usedText}). Apri questa cartella da Siderio (Apri pacchetto).");
             try { Process.Start("explorer.exe", dest); } catch { /* explorer opzionale */ }
             MessageBox.Show($"Cartella creata:\n{dest}", "Siderio");
         }

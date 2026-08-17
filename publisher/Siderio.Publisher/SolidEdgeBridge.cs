@@ -27,8 +27,9 @@ public static class SolidEdgeBridge
 
         object? matTable = null;
         try { matTable = app.GetMaterialTable(); } catch { /* versioni senza tabella */ }
+        var catalog = ReadMaterialCatalog(matTable);
 
-        var occurrences = WalkOccurrences(app, matTable, (object)doc.Occurrences, "", readMaterial: true);
+        var occurrences = WalkOccurrences(app, matTable, catalog, (object)doc.Occurrences, "", readMaterial: true);
         var configurations = ReadConfigurations(doc, occurrences);
 
         return new PublishDraft
@@ -40,6 +41,7 @@ public static class SolidEdgeBridge
             ClientName = ReadProperty(doc, "Company") ?? ReadProperty(doc, "Author") ?? "",
             Occurrences = occurrences,
             Configurations = configurations,
+            TableMaterials = catalog.OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToList(),
         };
     }
 
@@ -73,7 +75,7 @@ public static class SolidEdgeBridge
                 ["triangleCount"] = 0,
                 ["color"] = new JsonArray(color[0], color[1], color[2]),
             };
-            if (occ.Material != null)
+            if (occ.Material != null && !string.IsNullOrWhiteSpace(occ.Material.Name))
             {
                 var material = new JsonObject { ["name"] = occ.Material.Name };
                 if (occ.Material.Density is { } density) material["density"] = density;
@@ -147,12 +149,15 @@ public static class SolidEdgeBridge
     private static List<OccurrenceInfo> WalkOccurrences(
         dynamic app,
         object? matTable,
+        HashSet<string> catalog,
         object occurrencesObj,
         string prefix,
-        bool readMaterial)
+        bool readMaterial,
+        Dictionary<string, MaterialInfo?>? materialByDoc = null)
     {
         dynamic occurrences = occurrencesObj;
         var list = new List<OccurrenceInfo>();
+        materialByDoc ??= new Dictionary<string, MaterialInfo?>(StringComparer.OrdinalIgnoreCase);
         int count = occurrences.Count;
         for (int i = 1; i <= count; i++)
         {
@@ -162,74 +167,183 @@ public static class SolidEdgeBridge
             bool visible = true;
             try { visible = Convert.ToBoolean(occ.Visible); } catch { /* alcune occorrenze non espongono Visible */ }
             var info = new OccurrenceInfo { Id = id, Name = name, Visible = visible };
-            if (readMaterial) ReadOccurrenceMaterial(app, matTable, occ, info);
-            list.Add(info);
+
+            object? sub = null;
+            bool isLeaf = true;
             try
             {
-                object? sub = occ.Suboccurrences;
+                sub = occ.Suboccurrences;
                 if (sub != null)
                 {
                     dynamic subDyn = sub;
-                    if (subDyn.Count > 0)
-                    {
-                        list.AddRange(WalkOccurrences(app, matTable, sub, id, readMaterial));
-                    }
+                    if (subDyn.Count > 0) isLeaf = false;
                 }
             }
             catch
             {
-                // parte foglia
+                sub = null;
+            }
+
+            if (readMaterial && isLeaf)
+            {
+                ReadOccurrenceMaterial(app, matTable, catalog, materialByDoc, occ, info);
+            }
+            list.Add(info);
+            if (!isLeaf && sub != null)
+            {
+                list.AddRange(WalkOccurrences(app, matTable, catalog, sub, id, readMaterial, materialByDoc));
             }
         }
         return list;
     }
 
-    private static void ReadOccurrenceMaterial(dynamic app, object? matTable, dynamic occ, OccurrenceInfo info)
+    private static void ReadOccurrenceMaterial(
+        dynamic app,
+        object? matTable,
+        HashSet<string> catalog,
+        Dictionary<string, MaterialInfo?> materialByDoc,
+        dynamic occ,
+        OccurrenceInfo info)
     {
         object? doc = null;
         try { doc = occ.OccurrenceDocument; } catch { /* occorrenza senza documento */ }
+
+        var docKey = doc == null
+            ? ""
+            : (SafeString(() => ((dynamic)doc).FullName) ?? SafeString(() => ((dynamic)doc).Name) ?? "");
+
+        if (!string.IsNullOrEmpty(docKey) && materialByDoc.TryGetValue(docKey, out var cached))
+        {
+            info.Material = cached;
+            ApplyFaceLook(app, matTable, occ, doc, cached?.Name, info);
+            return;
+        }
 
         string? matName = null;
         if (matTable != null && doc != null)
         {
             matName = InvokeOutString(matTable, "GetCurrentMaterialName", doc);
         }
+        matName = NormalizeTableMaterialName(matName, catalog, matTable);
 
         double? density = null;
-        if (matTable != null && !string.IsNullOrWhiteSpace(matName))
+        if (matTable != null && matName != null)
         {
             density = ToGcm3(InvokeOutNumber(matTable, "GetMatPropValue", matName, 23));
         }
-        if (density == null && doc != null)
-        {
-            density = ReadDensityVariable(doc);
-        }
 
+        ApplyFaceLook(app, matTable, occ, doc, matName, info);
+
+        MaterialInfo? material = null;
+        if (matName != null)
+        {
+            material = new MaterialInfo
+            {
+                Name = matName,
+                Density = density,
+                Opacity = info.Opacity,
+            };
+        }
+        info.Material = material;
+        if (!string.IsNullOrEmpty(docKey)) materialByDoc[docKey] = material;
+    }
+
+    private static void ApplyFaceLook(
+        dynamic app,
+        object? matTable,
+        dynamic occ,
+        object? doc,
+        string? matName,
+        OccurrenceInfo info)
+    {
         object? style = null;
         try { style = occ.FaceStyle; } catch { /* nessuno stile in assieme */ }
-        if (style == null && matTable != null && !string.IsNullOrWhiteSpace(matName) && doc != null)
+        if (style == null && matTable != null && matName != null && doc != null)
         {
             var styleName = InvokeOutString(matTable, "GetMatPropValue", matName, 20);
             if (!string.IsNullOrWhiteSpace(styleName)) style = FindFaceStyle(doc, app, styleName);
         }
         if (style == null && doc != null) style = ReadBodyFaceStyle(doc);
-
-        double? opacity = null;
-        double[]? color = null;
-        if (style != null)
+        if (style == null) return;
+        try
         {
-            try { opacity = Convert.ToDouble(((dynamic)style).Opacity); } catch { /* opacity assente */ }
-            color = ReadStyleColor(style);
+            var opacity = Convert.ToDouble(((dynamic)style).Opacity);
+            info.Opacity = opacity is >= 0 and <= 1 ? opacity : opacity is > 1 and <= 100 ? opacity / 100.0 : opacity;
         }
+        catch { /* opacity assente */ }
+        info.Color = ReadStyleColor(style);
+    }
 
-        if (string.IsNullOrWhiteSpace(matName) && density == null && opacity == null && color == null) return;
-        info.Material = new MaterialInfo
+    private static HashSet<string> ReadMaterialCatalog(object? matTable)
+    {
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (matTable == null) return names;
+        try
         {
-            Name = matName?.Trim() ?? "",
-            Density = density,
-            Opacity = opacity is >= 0 and <= 1 ? opacity : opacity is > 1 and <= 100 ? opacity / 100.0 : opacity,
-        };
-        info.Color = color;
+            AddMaterialNames(names, ((dynamic)matTable).GetMaterialNames());
+        }
+        catch { /* firma diversa */ }
+        if (names.Count == 0)
+        {
+            AddMaterialNames(names, InvokeOut(matTable, "GetMaterialNames", []));
+        }
+        names.RemoveWhere(LooksLikePartFile);
+        return names;
+    }
+
+    private static void AddMaterialNames(HashSet<string> names, object? raw)
+    {
+        if (raw == null) return;
+        if (raw is string text)
+        {
+            foreach (var item in text.Split(['\r', '\n', ';', '|'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            {
+                if (!string.IsNullOrWhiteSpace(item)) names.Add(item);
+            }
+            return;
+        }
+        if (raw is Array array)
+        {
+            foreach (var item in array)
+            {
+                var name = item?.ToString()?.Trim();
+                if (!string.IsNullOrWhiteSpace(name)) names.Add(name);
+            }
+            return;
+        }
+        if (raw is System.Collections.IEnumerable enumerable and not string)
+        {
+            foreach (var item in enumerable)
+            {
+                var name = item?.ToString()?.Trim();
+                if (!string.IsNullOrWhiteSpace(name)) names.Add(name);
+            }
+        }
+    }
+
+    private static string? NormalizeTableMaterialName(string? raw, HashSet<string> catalog, object? matTable)
+    {
+        var name = raw?.Trim();
+        if (string.IsNullOrWhiteSpace(name) || LooksLikePartFile(name)) return null;
+        if (catalog.Count > 0)
+        {
+            return catalog.FirstOrDefault(item => string.Equals(item, name, StringComparison.OrdinalIgnoreCase));
+        }
+        if (matTable != null && ToGcm3(InvokeOutNumber(matTable, "GetMatPropValue", name, 23)) != null)
+        {
+            return name;
+        }
+        return null;
+    }
+
+    private static bool LooksLikePartFile(string name)
+    {
+        return name.EndsWith(".par", StringComparison.OrdinalIgnoreCase)
+            || name.EndsWith(".psm", StringComparison.OrdinalIgnoreCase)
+            || name.EndsWith(".asm", StringComparison.OrdinalIgnoreCase)
+            || name.EndsWith(".pwd", StringComparison.OrdinalIgnoreCase)
+            || name.Contains(".par:", StringComparison.OrdinalIgnoreCase)
+            || name.Contains(".asm:", StringComparison.OrdinalIgnoreCase);
     }
 
     private static double? ReadDensityVariable(object doc)
@@ -413,7 +527,7 @@ public static class SolidEdgeBridge
                 dynamic cfg = configs.Item(i);
                 string name = SafeString(() => cfg.Name) ?? $"CFG_{i}";
                 try { cfg.Apply(); } catch { try { cfg.Activate(); } catch { /* versioni diverse */ } }
-                var snapshot = WalkOccurrences(null!, null, (object)doc.Occurrences, "", readMaterial: false);
+                var snapshot = WalkOccurrences(null!, null, [], (object)doc.Occurrences, "", readMaterial: false);
                 var visible = snapshot
                     .Where(o => o.Visible)
                     .Select(o => o.Name)
@@ -470,6 +584,16 @@ public sealed class PublishDraft
     public string ClientName { get; set; } = "";
     public List<OccurrenceInfo> Occurrences { get; set; } = [];
     public List<ConfigurationInfo> Configurations { get; set; } = [];
+    public List<string> TableMaterials { get; set; } = [];
+
+    public List<string> UsedMaterialNames() =>
+        Occurrences
+            .Select(o => o.Material?.Name)
+            .Where(n => !string.IsNullOrWhiteSpace(n))
+            .Cast<string>()
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(n => n, StringComparer.OrdinalIgnoreCase)
+            .ToList();
 }
 
 public sealed class OccurrenceInfo
@@ -479,6 +603,7 @@ public sealed class OccurrenceInfo
     public bool Visible { get; set; } = true;
     public MaterialInfo? Material { get; set; }
     public double[]? Color { get; set; }
+    public double? Opacity { get; set; }
 }
 
 public sealed class MaterialInfo

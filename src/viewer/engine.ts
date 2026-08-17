@@ -15,6 +15,7 @@ import {
 } from "../../shared/material";
 import { type StandardView } from "../../shared/view";
 import { orbitDepth, pointOnViewAxis } from "../../shared/orbitPivot";
+import { isCrossingSelect, normalizeRect, partHitsWindow, type ScreenRect } from "../../shared/selectWindow";
 import { SectionTool, type SectionPhase } from "./sectionTool";
 import { ViewCubeWidget, type CubeCommand } from "./viewCube";
 
@@ -75,7 +76,7 @@ export class SiderioEngine {
   private modelCenter = new THREE.Vector3();
   private modelSize = 1;
   private disposed = false;
-  private pointerDown: { x: number; y: number; button: number; ctrl: boolean } | null = null;
+  private pointerDown: { x: number; y: number; button: number; ctrl: boolean; empty: boolean } | null = null;
   private lastPointer = { x: 0, y: 0 };
   private mmbDown = false;
   private windowZoom = false;
@@ -284,6 +285,18 @@ export class SiderioEngine {
     }
     const label = partId ? (this.parts.get(partId)?.name ?? partId) : null;
     this.markSelection(additive, label);
+    this.refreshMaterials();
+    this.emitSelection();
+  }
+
+  selectMany(ids: string[], additive = false): void {
+    if (!additive) this.selectedIds.clear();
+    for (const id of ids) this.selectedIds.add(id);
+    this.selectionMulti = this.selectedIds.size > 1;
+    this.selectionLabel =
+      this.selectionMulti || this.selectedIds.size === 0
+        ? null
+        : (this.parts.get([...this.selectedIds][0] ?? "")?.name ?? null);
     this.refreshMaterials();
     this.emitSelection();
   }
@@ -759,12 +772,27 @@ export class SiderioEngine {
 
   private readonly onPointerDown = (event: PointerEvent) => {
     this.lastPointer = { x: event.clientX, y: event.clientY };
-    this.pointerDown = { x: event.clientX, y: event.clientY, button: event.button, ctrl: event.ctrlKey || event.metaKey };
+    const empty =
+      event.button === 0 && !this.windowZoom && !this.section.isWizard() ? !this.hitPartAt(event.clientX, event.clientY) : false;
+    this.pointerDown = {
+      x: event.clientX,
+      y: event.clientY,
+      button: event.button,
+      ctrl: event.ctrlKey || event.metaKey,
+      empty,
+    };
     if (event.button === 1) this.mmbDown = true;
     if (event.button === 1) this.anchorOrbitToModel(event);
     if (this.windowZoom && event.button === 0 && !this.section.isWizard()) {
-      this.ensureZoomRect();
+      this.ensureZoomRect("zoom");
       this.updateZoomRect(event.clientX, event.clientY, event.clientX, event.clientY);
+    }
+    if (event.button === 0) {
+      try {
+        this.canvas.setPointerCapture(event.pointerId);
+      } catch {
+        /* capture non disponibile */
+      }
     }
   };
 
@@ -774,13 +802,22 @@ export class SiderioEngine {
       this.section.handleMove(event, this.canvas);
       return;
     }
-    if (!this.pointerDown || !this.windowZoom || this.pointerDown.button !== 0) return;
+    if (!this.pointerDown || this.pointerDown.button !== 0) return;
+    const dx = event.clientX - this.pointerDown.x;
+    const dy = event.clientY - this.pointerDown.y;
+    if (this.windowZoom) {
+      this.updateZoomRect(this.pointerDown.x, this.pointerDown.y, event.clientX, event.clientY);
+      return;
+    }
+    if (!this.pointerDown.empty || dx * dx + dy * dy < 36) return;
+    this.ensureZoomRect(isCrossingSelect(this.pointerDown.x, event.clientX) ? "crossing" : "window");
     this.updateZoomRect(this.pointerDown.x, this.pointerDown.y, event.clientX, event.clientY);
   };
 
   private readonly onPointerUp = (event: PointerEvent) => {
     this.lastPointer = { x: event.clientX, y: event.clientY };
     if (event.button === 1) this.mmbDown = false;
+    if (this.canvas.hasPointerCapture(event.pointerId)) this.canvas.releasePointerCapture(event.pointerId);
     if (!this.pointerDown) return;
     const start = this.pointerDown;
     this.pointerDown = null;
@@ -801,19 +838,17 @@ export class SiderioEngine {
       return;
     }
 
-    if (dx * dx + dy * dy > 16) return;
-    const rect = this.canvas.getBoundingClientRect();
-    this.pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
-    this.pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
-    this.camera.updateMatrixWorld();
-    this.raycaster.setFromCamera(this.pointer, this.camera);
-    const hits = this.raycaster.intersectObjects([...this.partByMesh.keys()].filter((mesh) => mesh.visible), false);
-    const hit = hits[0]?.object;
-    if (hit instanceof THREE.Mesh) {
-      this.select(this.partByMesh.get(hit) ?? null, start.ctrl);
-    } else if (!start.ctrl) {
-      this.select(null);
+    if (start.empty && dx * dx + dy * dy > 36) {
+      this.selectByScreenRect(start.x, start.y, event.clientX, event.clientY, start.ctrl);
+      this.clearZoomRect();
+      return;
     }
+    this.clearZoomRect();
+
+    if (dx * dx + dy * dy > 16) return;
+    const hit = this.hitPartAt(event.clientX, event.clientY);
+    if (hit) this.select(hit, start.ctrl);
+    else if (!start.ctrl) this.select(null);
   };
 
   private zoomToScreenRect(x0: number, y0: number, x1: number, y1: number): void {
@@ -842,14 +877,43 @@ export class SiderioEngine {
     this.applyBoxFit(box);
   }
 
-  private ensureZoomRect(): void {
-    if (this.zoomRectEl) return;
-    const parent = this.canvas.parentElement;
-    if (!parent) return;
-    const el = document.createElement("div");
-    el.className = "zoom-rect";
-    parent.appendChild(el);
-    this.zoomRectEl = el;
+  private hitPartAt(clientX: number, clientY: number): string | null {
+    const rect = this.canvas.getBoundingClientRect();
+    this.pointer.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+    this.pointer.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+    this.camera.updateMatrixWorld();
+    this.raycaster.setFromCamera(this.pointer, this.camera);
+    const hits = this.raycaster.intersectObjects(
+      [...this.partByMesh.keys()].filter((mesh) => mesh.visible),
+      false,
+    );
+    const hit = hits[0]?.object;
+    return hit instanceof THREE.Mesh ? (this.partByMesh.get(hit) ?? null) : null;
+  }
+
+  private selectByScreenRect(x0: number, y0: number, x1: number, y1: number, additive: boolean): void {
+    const window = normalizeRect(x0, y0, x1, y1);
+    if (window.right - window.left < 8 || window.bottom - window.top < 8) return;
+    const crossing = isCrossingSelect(x0, x1);
+    const canvasRect = this.canvas.getBoundingClientRect();
+    this.camera.updateMatrixWorld();
+    const ids: string[] = [];
+    for (const [id, entry] of this.parts) {
+      const screen = projectPartToScreen(entry, this.camera, canvasRect);
+      if (screen && partHitsWindow(screen, window, crossing)) ids.push(id);
+    }
+    this.selectMany(ids, additive);
+  }
+
+  private ensureZoomRect(kind: "zoom" | "crossing" | "window" = "zoom"): void {
+    if (!this.zoomRectEl) {
+      const parent = this.canvas.parentElement;
+      if (!parent) return;
+      const el = document.createElement("div");
+      parent.appendChild(el);
+      this.zoomRectEl = el;
+    }
+    this.zoomRectEl.className = kind === "zoom" ? "zoom-rect" : `sel-rect ${kind}`;
   }
 
   private updateZoomRect(x0: number, y0: number, x1: number, y1: number): void {
@@ -1046,6 +1110,49 @@ function visibleBox(parts: Map<string, PartEntry>): THREE.Box3 {
     });
   }
   return box;
+}
+
+const _proj = new THREE.Vector3();
+const _view = new THREE.Vector3();
+
+function projectPartToScreen(
+  entry: PartEntry,
+  camera: THREE.Camera,
+  canvasRect: DOMRect,
+): ScreenRect | null {
+  const box = new THREE.Box3();
+  let any = false;
+  for (const mesh of entry.meshes) {
+    if (!mesh.visible) continue;
+    box.expandByObject(mesh);
+    any = true;
+  }
+  if (!any || box.isEmpty()) return null;
+  const xs = [box.min.x, box.max.x];
+  const ys = [box.min.y, box.max.y];
+  const zs = [box.min.z, box.max.z];
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  let seen = false;
+  for (const x of xs) {
+    for (const y of ys) {
+      for (const z of zs) {
+        _view.set(x, y, z).applyMatrix4(camera.matrixWorldInverse);
+        if (_view.z >= -1e-4) continue;
+        _proj.set(x, y, z).project(camera);
+        const sx = canvasRect.left + (_proj.x * 0.5 + 0.5) * canvasRect.width;
+        const sy = canvasRect.top + (-_proj.y * 0.5 + 0.5) * canvasRect.height;
+        minX = Math.min(minX, sx);
+        maxX = Math.max(maxX, sx);
+        minY = Math.min(minY, sy);
+        maxY = Math.max(maxY, sy);
+        seen = true;
+      }
+    }
+  }
+  return seen ? { left: minX, top: minY, right: maxX, bottom: maxY } : null;
 }
 
 function nameMatches(partName: string, visibleNames: string[]): boolean {

@@ -666,6 +666,19 @@ a svg,
   pointer-events: none;
   z-index: 4;
 }
+.sel-rect {
+  position: absolute;
+  pointer-events: none;
+  z-index: 4;
+}
+.sel-rect.crossing {
+  border: 1px dashed #e8c547;
+  background: rgba(232, 197, 71, 0.16);
+}
+.sel-rect.window {
+  border: 2px solid #3d9a4a;
+  background: rgba(61, 154, 74, 0.14);
+}
 .office-stage { position: relative; min-height: 0; background: var(--stage); }
 .tree-node { margin-left: 10px; }
 .tree-node button { display: block; width: 100%; text-align: left; background: transparent; color: var(--ink); border: 0; padding: 4px 6px; border-radius: 6px; cursor: pointer; }
